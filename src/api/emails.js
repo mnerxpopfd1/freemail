@@ -8,6 +8,7 @@ import { buildMockEmails, buildMockEmailDetail } from './mock.js';
 import { extractEmail } from '../utils/common.js';
 import { getMailboxIdByAddress } from '../db/index.js';
 import { parseEmailBody } from '../email/parser.js';
+import { deleteMailObject, getMailObject } from '../email/storage.js';
 
 // 邮箱登录模式只允许查看最近 24 小时内的邮件。
 function mailboxOnlyTimeFilter(enabled) {
@@ -18,11 +19,11 @@ function mailboxOnlyTimeFilter(enabled) {
   };
 }
 
-// 邮件正文优先从 R2 原始 EML 解析，失败时由调用方回退到数据库字段。
-async function loadEmailBodyFromR2(r2, objectKey) {
-  if (!r2 || !objectKey) return { content: '', html_content: '' };
+// 邮件正文优先从 KV/R2 原始 EML 解析，失败时由调用方回退到数据库字段。
+async function loadEmailBodyFromStore(mailStore, bucket, objectKey) {
+  if (!objectKey) return { content: '', html_content: '' };
   try {
-    const obj = await r2.get(objectKey);
+    const obj = await getMailObject(mailStore, bucket, objectKey);
     if (!obj) return { content: '', html_content: '' };
     let raw = '';
     if (typeof obj.text === 'function') raw = await obj.text();
@@ -39,6 +40,7 @@ export async function handleEmailsApi(request, db, url, path, options) {
   const isMock = !!options.mockOnly;
   const isMailboxOnly = !!options.mailboxOnly;
   const r2 = options.r2;
+  const mailStore = options.mailStore || { kv: null, r2 };
 
   if (path === '/api/emails' && request.method === 'GET') {
     const mailbox = url.searchParams.get('mailbox');
@@ -129,15 +131,15 @@ export async function handleEmailsApi(request, db, url, path, options) {
       if (!access.allowed) return errorResponse('Forbidden', 403);
 
       const { results: toDelete } = await db.prepare(
-        'SELECT r2_object_key FROM messages WHERE mailbox_id = ? AND r2_object_key IS NOT NULL'
+        'SELECT r2_bucket, r2_object_key FROM messages WHERE mailbox_id = ? AND r2_object_key IS NOT NULL'
       ).bind(mailboxId).all();
       const result = await db.prepare('DELETE FROM messages WHERE mailbox_id = ?').bind(mailboxId).run();
       const deletedCount = result?.meta?.changes || 0;
 
-      if (r2 && toDelete?.length) {
-        for (const { r2_object_key } of toDelete) {
-          try { await r2.delete(r2_object_key); } catch (err) {
-            console.error('清空邮件时删除 R2 对象失败:', err);
+      if (toDelete?.length) {
+        for (const { r2_bucket, r2_object_key } of toDelete) {
+          try { await deleteMailObject(mailStore, r2_bucket, r2_object_key); } catch (err) {
+            console.error('清空邮件时删除邮件对象失败:', err);
           }
         }
       }
@@ -160,8 +162,7 @@ export async function handleEmailsApi(request, db, url, path, options) {
     const row = (results || [])[0];
     if (!row || !row.r2_object_key) return errorResponse('未找到对象', 404);
     try {
-      if (!r2) return errorResponse('R2 未绑定', 500);
-      const obj = await r2.get(row.r2_object_key);
+      const obj = await getMailObject(mailStore, row.r2_bucket, row.r2_object_key);
       if (!obj) return errorResponse('对象不存在', 404);
       const headers = new Headers({ 'Content-Type': 'message/rfc822' });
       headers.set('Content-Disposition', `attachment; filename="${String(row.r2_object_key).split('/').pop()}"`);
@@ -189,7 +190,7 @@ export async function handleEmailsApi(request, db, url, path, options) {
 
       await db.prepare('UPDATE messages SET is_read = 1 WHERE id = ?').bind(emailId).run();
       const row = results[0];
-      let { content, html_content } = await loadEmailBodyFromR2(r2, row.r2_object_key);
+      let { content, html_content } = await loadEmailBodyFromStore(mailStore, row.r2_bucket, row.r2_object_key);
 
       if (!content && !html_content) {
         try {
@@ -227,13 +228,13 @@ export async function handleEmailsApi(request, db, url, path, options) {
     if (!access.allowed) return errorResponse('Forbidden', 403);
 
     try {
-      const row = await db.prepare('SELECT r2_object_key FROM messages WHERE id = ?').bind(emailId).first();
+      const row = await db.prepare('SELECT r2_bucket, r2_object_key FROM messages WHERE id = ?').bind(emailId).first();
       const result = await db.prepare('DELETE FROM messages WHERE id = ?').bind(emailId).run();
       const deleted = (result?.meta?.changes || 0) > 0;
 
-      if (deleted && r2 && row?.r2_object_key) {
-        try { await r2.delete(row.r2_object_key); } catch (err) {
-          console.error('删除 R2 对象失败:', err);
+      if (deleted && row?.r2_object_key) {
+        try { await deleteMailObject(mailStore, row.r2_bucket, row.r2_object_key); } catch (err) {
+          console.error('删除邮件对象失败:', err);
         }
       }
 
