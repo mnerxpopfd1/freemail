@@ -8,6 +8,7 @@ import { extractEmail, normalizeEmailAlias } from '../utils/common.js';
 import { forwardByLocalPart, forwardByMailboxConfig } from './forwarder.js';
 import { parseEmailBody, extractVerificationCode } from './parser.js';
 import { getForwardTarget } from '../db/mailboxes.js';
+import { getMailStore, putMailObject } from './storage.js';
 
 export async function handleEmailEvent(message, env, ctx) {
   let DB;
@@ -62,8 +63,9 @@ export async function handleEmailEvent(message, env, ctx) {
     const mailbox = normalizedAddr || normalizeEmailAlias(extractEmail(toHeader));
     const sender = extractEmail(fromHeader);
 
-    const r2 = env.MAIL_EML;
+    const mailStore = getMailStore(env);
     let objectKey = '';
+    let objectBucket = '';
     try {
       const now = new Date();
       const y = now.getUTCFullYear();
@@ -75,10 +77,14 @@ export async function handleEmailEvent(message, env, ctx) {
       const keyId = (globalThis.crypto?.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const safeMailbox = (mailbox || 'unknown').toLowerCase().replace(/[^a-z0-9@._-]/g, '_');
       objectKey = `${y}/${m}/${d}/${safeMailbox}/${hh}${mm}${ss}-${keyId}.eml`;
-      if (r2 && rawBuffer) {
-        await r2.put(objectKey, new Uint8Array(rawBuffer), { httpMetadata: { contentType: 'message/rfc822' } });
+      if (rawBuffer) {
+        objectBucket = await putMailObject(mailStore, objectKey, rawBuffer);
       }
-    } catch (e) { console.error('R2 put failed:', e); }
+    } catch (e) {
+      console.error('邮件原文存储失败:', e);
+      objectKey = '';
+      objectBucket = '';
+    }
 
     const preview = String(
       (textContent?.trim() ? textContent : (htmlContent || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()) || ''
@@ -116,7 +122,7 @@ export async function handleEmailEvent(message, env, ctx) {
     await DB.prepare(`
       INSERT INTO messages (mailbox_id, sender, to_addrs, subject, verification_code, preview, r2_bucket, r2_object_key)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(mailboxId, sender, String(toAddrs || ''), subject || '(无主题)', verificationCode || null, preview || null, 'mail-eml', objectKey || '').run();
+    `).bind(mailboxId, sender, String(toAddrs || ''), subject || '(无主题)', verificationCode || null, preview || null, objectBucket || '', objectKey || '').run();
   } catch (err) {
     console.error('Email event handling error:', err);
   }
