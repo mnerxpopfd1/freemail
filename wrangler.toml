@@ -31,10 +31,15 @@ directory = "public"
 binding = "ASSETS"
 
 
-# R2 存储桶绑定（用于保存完整 EML 内容）
-[[r2_buckets]]
-binding = "MAIL_EML"
-bucket_name = "mail-eml"
+# KV 命名空间绑定（默认用于保存完整 EML 内容及附件）
+[[kv_namespaces]]
+binding = "MAIL_KV"
+id = "你的KV命名空间ID"
+
+# R2 存储桶绑定（可选：兼容旧数据或继续使用 R2 时再启用）
+# [[r2_buckets]]
+# binding = "MAIL_EML"
+# bucket_name = "mail-eml"
 
 # wrangler.toml (wrangler v3.88.0^) 日志服务
 # [observability.logs]
