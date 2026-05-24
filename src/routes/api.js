@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { getInitializedDatabase } from '../db/index.js';
 import { handleApiRequest } from '../api/index.js';
+import { getMailStore } from '../email/storage.js';
 
 const router = new Hono();
 
@@ -47,6 +48,7 @@ router.all('/api/*', async (c) => {
     sendflareApiKey: c.env.SENDFLARE_API_KEY || c.env.SENDFLARE_TOKEN || '',
     adminName: String(c.env.ADMIN_NAME || 'admin').trim().toLowerCase(),
     r2: c.env.MAIL_EML,
+    mailStore: getMailStore(c.env),
     authPayload
   };
 
