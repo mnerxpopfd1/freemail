@@ -6,6 +6,7 @@
 import { extractEmail, normalizeEmailAlias } from '../utils/common.js';
 import { getOrCreateMailboxId } from '../db/index.js';
 import { parseEmailBody, extractVerificationCode } from './parser.js';
+import { getMailStore, putMailObject } from './storage.js';
 
 /**
  * 处理通过 HTTP 接收的邮件
@@ -72,21 +73,23 @@ export async function handleEmailReceive(request, db, env) {
     }
 
     let objectKey = '';
+    let objectBucket = '';
     try {
-      const r2 = env?.MAIL_EML;
-      if (r2) {
-        const y = now.getUTCFullYear();
-        const m = String(now.getUTCMonth() + 1).padStart(2, '0');
-        const d = String(now.getUTCDate()).padStart(2, '0');
-        const hh = String(now.getUTCHours()).padStart(2, '0');
-        const mm = String(now.getUTCMinutes()).padStart(2, '0');
-        const ss = String(now.getUTCSeconds()).padStart(2, '0');
-        const keyId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-        const safeMailbox = (mailbox || 'unknown').toLowerCase().replace(/[^a-z0-9@._-]/g, '_');
-        objectKey = `${y}/${m}/${d}/${safeMailbox}/${hh}${mm}${ss}-${keyId}.eml`;
-        await r2.put(objectKey, eml, { httpMetadata: { contentType: 'message/rfc822' } });
-      }
-    } catch (_) { objectKey = ''; }
+      const mailStore = getMailStore(env);
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(now.getUTCDate()).padStart(2, '0');
+      const hh = String(now.getUTCHours()).padStart(2, '0');
+      const mm = String(now.getUTCMinutes()).padStart(2, '0');
+      const ss = String(now.getUTCSeconds()).padStart(2, '0');
+      const keyId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const safeMailbox = (mailbox || 'unknown').toLowerCase().replace(/[^a-z0-9@._-]/g, '_');
+      objectKey = `${y}/${m}/${d}/${safeMailbox}/${hh}${mm}${ss}-${keyId}.eml`;
+      objectBucket = await putMailObject(mailStore, objectKey, eml);
+    } catch (_) {
+      objectKey = '';
+      objectBucket = '';
+    }
 
     const previewBase = (text || html.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
     const preview = String(previewBase || '').slice(0, 120);
@@ -105,7 +108,7 @@ export async function handleEmailReceive(request, db, env) {
       subject || '(无主题)',
       verificationCode || null,
       preview || null,
-      'mail-eml',
+      objectBucket || '',
       objectKey || ''
     ).run();
 
