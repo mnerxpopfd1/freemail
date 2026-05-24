@@ -22,6 +22,7 @@ export async function handleApiRequest(request, db, mailDomains, options = {
   resendApiKey: '',
   adminName: '',
   r2: null,
+  mailStore: null,
   authPayload: null,
   mailboxOnly: false
 }) {
